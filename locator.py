@@ -18,7 +18,7 @@ import tqdm
 
 # """
 # This messy code is here because I couldn't get pyfftw installed on my Windows OS, but got it fine on my Linux OS.
-# Essentially, I wanted the Locator to ise pyfftw when it was available, or numpy's fft module otherwise.
+# Essentially, I wanted the Locator to use pyfftw when it was available, or numpy's fft module otherwise.
 # """
 wf = False
 pftw = False
