@@ -154,7 +154,6 @@ class Lakeator:
             t = np.fft.rfft(self.data[:,idx])
             self.data[:, idx] = np.fft.irfft(t/np.abs(t), n=2*len(t)-1)
 
-    # @jit(nopython=True)
     def _create_interp_(self, mic1, mic2, mic1data, mic2data, buffer_percent=-10.0, res_scaling=5, filteraliased=False):
         """This function is to create the cubic interpolants for use in the correlation function. Uses GCC.
 
@@ -211,14 +210,6 @@ class Lakeator:
             proc = np.abs(X1*np.conj(X2))/(X1*np.conj(X1)*X2*np.conj(X2))
             corr = fft_pack.irfft(X1 * X2star * proc, n=(res_scaling * n))
 
-        elif (self._GCC_proc_ == "ML") or (self._GCC_proc_ == "HT"):
-            # NOT WORKING, CHECKING SOMETHING
-            raise Warning("This one isn't working. Don't use it.")
-            gamma12 = (X1*X2star)/sqrt((X1*np.conj(X1))*(np.conj(X2star)*X2star))
-            nmsqgm = gamma12*np.conj(gamma12)
-            proc = nmsqgm/((X1*X2star)*(1-nmsqgm))
-            corr = fft_pack.irfft(X1 * X2star * proc, n=(res_scaling * n))
-
         else:
             proc = 1.0
             corr = fft_pack.irfft(X1 * X2star * proc, n=(res_scaling * n))
@@ -231,35 +222,6 @@ class Lakeator:
                            dtype='int32')
 
         cInterp = interp1d(x=(corrxs/res_scaling-dlen)+1, y=corr[corrxs], kind='cubic')
-
-        return cInterp
-
-
-    def _create_interp_NA_(self, mic1, mic2, mic1data, mic2data, buffer_percent=0.1, filteraliased=True):
-        """This function is to create the cubic interpolants for use in the correlation function. Uses GCC WITHOUT the Fourier Transform to avoid aliasing.
-
-        Arguments:
-            mic1 (int): The index of the first microphone of interest.
-            mic2 (int): The index of the second microphone of interest.
-            mic1data (np.array): The data corresponding to the first microphone.
-            mic2data (np.array): The data corresponding to the second microphone.
-            buffer_percent (float): The percent headroom to give the correlation function to avoid out-of-range exceptions.
-            res_scaling (float): Scales the resolution
-        """
-
-        dlen = len(mic1data)
-        num_samples = la.norm(mic1-mic2)*(1+buffer_percent)*(1/self.sound_speed)*self.sample_rate
-        num_samples = int(round(num_samples))
-        if buffer_percent < 0:
-            num_samples = dlen-1
-
-        corr = signal.fftconvolve(mic1data, mic2data[::-1])
-        nl = (len(corr)-1)//2
-        corr = corr[nl-num_samples:nl+num_samples+1]
-
-        corrxs = np.arange(start=-num_samples, stop=num_samples+1, step=1, dtype='int32')
-
-        cInterp = interp1d(x=corrxs, y=corr, kind='cubic')
 
         return cInterp
 
@@ -371,7 +333,7 @@ class Lakeator:
         else:
             return cors
 
-    def polynom_steervec(self, samples, max_tau=1500):
+    def _polynom_steervec(self, samples, max_tau=1500):
         """Takes a vector of M desired delays and a maximum lag parameter max_tau, and returns the (M, 1, 2*max_tau+1)
         polynomial steering vector which contains the z-transform of the fractional delay filters necessary to delay each
         channel of a M-channel audio file by the corresponding delay parameter from the input vector. For example,
@@ -410,18 +372,12 @@ class Lakeator:
         loc_dif = self.mics - np.tile(location, (self.mics.shape[0], 1))
         dists = np.linalg.norm(loc_dif, axis=1)
         samples = (dists*spl)/self.sound_speed
-        # print(self.mics, "\n", loc_dif, "\n", dists, samples, samples-min(samples), self.maxdist*spl/self.sound_speed, self.sound_speed, spl)
         samples -= min(samples)
 
         fracsamples = samples % 1
-        # print(fracsamples)
         intsamples = samples - fracsamples
-        # print(intsamples)
 
-        svs = self.polynom_steervec(fracsamples)
-        # print(svs.shape)
-        # plt.plot(svs[:,0,1500-25:1500+25].T)
-        # plt.show()
+        svs = self._polynom_steervec(fracsamples)
 
         t = np.tile(dt.T, (self.mics.shape[0], 1))
         t.shape = (t.shape[0], 1, t.shape[1])
@@ -511,9 +467,6 @@ class Lakeator:
         freq, idx = freqtup
 
         # Populate a(r, theta)
-        # print(freq)
-        # freq = freq*2*np.pi/self.sample_rate
-        # print(freq)
         a = np.exp(-1j*2*np.pi*freq*delm)
 
         # Find variance/covariance matrix S=X.X^H
@@ -657,8 +610,6 @@ class Lakeator:
 
         if shw:
             plt.show(block=block_run)
-            # f.savefig(title, bbox_inches='tight')
-            # plt.close(f)
             return
         else:
             return f
@@ -932,59 +883,6 @@ class Lakeator:
         else:
             return rest
 
-    def _broadband_MUSIC_(self, max_tau, resolution=720, delta=0.0001, max_iter=1000):
-        """This was where I was implementing the broadband MUSIC algorithm."""
-
-        raise Exception("This is untested and unfinished. SBR2 was not able to diagonalise the STCM well enough to continue.")
-
-        pstcm = self._space_time_covm_(max_tau)
-        Q, gs, r2s = SBR2(pstcm, delta=delta, maxiter=max_iter, loss=1.0e-6)
-        import pickle
-        with open('Hsave', 'wb') as f:
-            pickle.dump(Q, f)
-        with open('gsave', 'wb') as f:
-            pickle.dump(gs, f)
-        with open('r2save', 'wb') as f:
-            pickle.dump(r2s, f)
-        D = pmm(Q, pmm(pstcm, Q.h()))
-        Qn = Q[:, 1:, :]
-        try:
-            qm = Q.max_tau
-        except:
-            print("Had to force Q.max_tau")
-            Q.max_tau = max_tau
-        circlen = resolution
-        musicspec = np.zeros((circlen, 2))
-        idx = 0
-        for theta in np.linspace(start=0, stop=2 * np.pi, num=circlen):
-            atheta = self.polynom_steervec(theta=theta, max_tau=Q.max_tau)
-            ah_Hn = pmm(atheta.h(), Qn)
-            Hnh_a = pmm(Qn.h(), atheta)
-            Gamma = pmm(ah_Hn, Hnh_a).flatten()
-            musicspec[idx, 0] = theta
-            musicspec[idx, 1] = 1.0 / Gamma[Q.max_tau].real
-            idx += 1
-        return musicspec, gs, r2s
-
-    def _space_time_covm_(self, max_tau):
-        """Generates the Space-Time Covariance Matrix (STCM), with maximum lag parameter max_tau.
-        Adapted from PEVDToolbox/SpaceTimeCovMat.m from PEVD toolbox by S Weiss.
-
-        Arguments:
-            max_tau (int): The maximum lag parameter for the STCM.
-        """
-        M = self.data.shape[1]
-        L = self.data.shape[0]
-        R = PolynoMat(np.zeros((M, M, 2*max_tau+1), dtype='complex128'))
-        Lm = L-2*max_tau
-
-        Xref = self.data[max_tau:max_tau+Lm, :]
-        for tau in np.arange(0, 2*max_tau+1):
-            Xshift = self.data[tau:tau+Lm, :]
-            R[:, :, 2*max_tau-tau] = dot(Xref.T, Xshift)/Lm
-        R = (R+R.H())/2
-        return R
-
     def estimate_DOA(self, npoints=1000):
         """Gives an estimate of the source DOA based on AF-MUSIC for frequencies below the spatial Nyquist frequency, and
         a non aliasing version of GCC for frequencies above the spatial Nyquist frequency.
@@ -1010,7 +908,6 @@ class Lakeator:
         ax.plot(np.linspace(0, 2*np.pi, npoints), (out_bl / np.max(np.abs(out_bl)))*(out_abv / np.max(np.abs(out_abv))))
         plt.show()
         return
-
 
 def UCA(n, r, centerpoint=True, show=False):
     """A helper function to easily set up UCAs (uniform circular arrays).
